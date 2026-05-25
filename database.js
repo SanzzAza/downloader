@@ -1,58 +1,68 @@
-const sqlite3 = require("sqlite3").verbose();
-const db = new sqlite3.Database("./bot.db");
+const fs = require("fs");
 
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY,
-      username TEXT,
-      first_name TEXT,
-      downloads INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+const DB_FILE = "./bot.json";
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS downloads (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      platform TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-});
+function loadDB() {
+  if (!fs.existsSync(DB_FILE)) {
+    return { users: {}, downloads: [] };
+  }
+  return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
+}
+
+function saveDB(db) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
 
 function addUser(user) {
-  db.run(
-    `INSERT OR IGNORE INTO users (id, username, first_name) VALUES (?, ?, ?)`,
-    [user.id, user.username || "", user.first_name || ""]
-  );
+  const db = loadDB();
+  if (!db.users[user.id]) {
+    db.users[user.id] = {
+      id: user.id,
+      username: user.username || "",
+      first_name: user.first_name || "",
+      downloads: 0,
+      created_at: new Date().toISOString()
+    };
+  }
+  saveDB(db);
 }
 
 function addDownload(userId, platform) {
-  db.run(`INSERT INTO downloads (user_id, platform) VALUES (?, ?)`, [userId, platform]);
-  db.run(`UPDATE users SET downloads = downloads + 1 WHERE id = ?`, [userId]);
+  const db = loadDB();
+  db.downloads.push({
+    user_id: userId,
+    platform,
+    created_at: new Date().toISOString()
+  });
+
+  if (db.users[userId]) {
+    db.users[userId].downloads += 1;
+  }
+
+  saveDB(db);
 }
 
 function getStats(callback) {
-  db.get(`SELECT COUNT(*) AS total_users FROM users`, (e1, users) => {
-    db.get(`SELECT COUNT(*) AS total_downloads FROM downloads`, (e2, downloads) => {
-      db.all(
-        `SELECT platform, COUNT(*) AS total FROM downloads GROUP BY platform ORDER BY total DESC`,
-        (e3, platforms) => {
-          callback({
-            totalUsers: users ? users.total_users : 0,
-            totalDownloads: downloads ? downloads.total_downloads : 0,
-            platforms: platforms || [],
-          });
-        }
-      );
-    });
+  const db = loadDB();
+  const platforms = {};
+
+  for (const d of db.downloads) {
+    platforms[d.platform] = (platforms[d.platform] || 0) + 1;
+  }
+
+  callback({
+    totalUsers: Object.keys(db.users).length,
+    totalDownloads: db.downloads.length,
+    platforms: Object.entries(platforms)
+      .map(([platform, total]) => ({ platform, total }))
+      .sort((a, b) => b.total - a.total)
   });
 }
 
 function getUsers(callback) {
-  db.all(`SELECT * FROM users ORDER BY downloads DESC LIMIT 100`, callback);
+  const db = loadDB();
+  const rows = Object.values(db.users).sort((a, b) => b.downloads - a.downloads);
+  callback(null, rows);
 }
 
 module.exports = { addUser, addDownload, getStats, getUsers };
