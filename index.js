@@ -60,6 +60,7 @@ function getMedia(data) {
 
       const typeRaw = String(item.type || item.ext || item.mime || "").toLowerCase();
       const type = typeRaw.includes("image") || isPhotoUrl(url) ? "photo" : "video";
+
       medias.push({ type, url });
     }
   }
@@ -85,9 +86,25 @@ function getMedia(data) {
   return medias.filter((m, i, arr) => arr.findIndex((x) => x.url === m.url) === i);
 }
 
+function getAudio(data) {
+  if (data.audio && data.audio.play) {
+    return {
+      url: data.audio.play,
+      title: data.audio.title || "TikTok Audio",
+      author: data.audio.author || "MediaMuncher",
+      duration: data.audio.duration || 0,
+    };
+  }
+
+  return null;
+}
+
 function menuKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("📥 Download", "help_download"), Markup.button.callback("📌 Command", "help_command")],
+    [
+      Markup.button.callback("📥 Download", "help_download"),
+      Markup.button.callback("📌 Command", "help_command"),
+    ],
     [Markup.button.url("👨‍💻 Owner", "https://t.me/einsteinsocrates46")],
   ]);
 }
@@ -96,7 +113,11 @@ function welcomeText() {
   return (
     "🤖 *Welcome to MediaMuncher!*\n\n" +
     "Downloader social media cepat, simpel, dan rapi.\n\n" +
-    "✅ TikTok\n✅ Instagram Reels\n✅ Facebook Reels\n✅ X/Twitter\n✅ Threads\n\n" +
+    "✅ TikTok Video + Audio\n" +
+    "✅ Instagram Reels\n" +
+    "✅ Facebook Reels\n" +
+    "✅ X/Twitter\n" +
+    "✅ Threads\n\n" +
     "📌 Kirim link langsung, nanti bot proses otomatis."
   );
 }
@@ -104,15 +125,19 @@ function welcomeText() {
 function helpText() {
   return (
     "📖 *MediaMuncher Help*\n\n" +
-    "Kirim link langsung:\n`https://vt.tiktok.com/xxxx`\n\n" +
-    "Atau pakai command:\n" +
+    "Kirim link langsung:\n" +
+    "`https://vt.tiktok.com/xxxx`\n\n" +
+    "Command:\n" +
     "`/tt link_tiktok`\n" +
     "`/ig link_instagram`\n" +
     "`/fb link_facebook`\n" +
     "`/x link_twitter`\n" +
     "`/threads link_threads`\n\n" +
-    "Admin:\n`/stats`\n`/users`\n`/broadcast pesan`\n\n" +
-    "⚠️ Pastikan link publik dan valid."
+    "🎵 TikTok otomatis dikirim video + audio.\n\n" +
+    "Admin:\n" +
+    "`/stats`\n" +
+    "`/users`\n" +
+    "`/broadcast pesan`"
   );
 }
 
@@ -131,7 +156,12 @@ async function sendWelcome(ctx) {
 
 async function loadingMessage(ctx) {
   const msg = await ctx.reply("⏳ Menghubungi server...");
-  const steps = ["🔎 Mendeteksi platform...", "📡 Mengambil data media...", "🧩 Menyiapkan file...", "🚀 Mengirim ke Telegram..."];
+  const steps = [
+    "🔎 Mendeteksi platform...",
+    "📡 Mengambil data media...",
+    "🧩 Menyiapkan file...",
+    "🚀 Mengirim ke Telegram...",
+  ];
 
   for (const step of steps) {
     await sleep(500);
@@ -149,20 +179,28 @@ async function processLink(ctx, url, forcedPlatform = null) {
   const platform = forcedPlatform || detectPlatform(url);
 
   if (!platform) {
-    return ctx.reply("❌ *Platform belum support atau link tidak valid.*", { parse_mode: "Markdown" });
+    return ctx.reply("❌ *Platform belum support atau link tidak valid.*", {
+      parse_mode: "Markdown",
+    });
   }
 
   const loading = await loadingMessage(ctx);
 
   try {
     const apiUrl = API_BASE + "?platform=" + platform + "&url=" + encodeURIComponent(url);
-    const res = await axios.get(apiUrl, { timeout: 60000, headers: { "User-Agent": "Mozilla/5.0" } });
+
+    const res = await axios.get(apiUrl, {
+      timeout: 60000,
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
 
     const medias = getMedia(res.data);
 
     if (!medias.length) {
       console.log(JSON.stringify(res.data, null, 2));
-      return ctx.reply("❌ *Media tidak ditemukan.*\n\nLink private/expired atau API berubah.", { parse_mode: "Markdown" });
+      return ctx.reply("❌ *Media tidak ditemukan.*\n\nLink private/expired atau API berubah.", {
+        parse_mode: "Markdown",
+      });
     }
 
     db.addDownload(ctx.from.id, platform);
@@ -189,12 +227,42 @@ async function processLink(ctx, url, forcedPlatform = null) {
       }
     }
 
+    if (platform === "tiktok") {
+      const audio = getAudio(res.data);
+
+      if (audio) {
+        try {
+          await ctx.replyWithAudio(
+            { url: audio.url },
+            {
+              title: audio.title,
+              performer: audio.author,
+              duration: audio.duration,
+              caption:
+                "🎵 *MediaMuncher Audio*\n\n" +
+                "🌐 Platform: *TIKTOK*\n" +
+                "📦 Tipe: *Audio / MP3*\n" +
+                "⚡ Status: *Success*",
+              parse_mode: "Markdown",
+            }
+          );
+
+          db.addDownload(ctx.from.id, "tiktok_audio");
+        } catch (e) {
+          console.error("Gagal kirim audio:", e.message);
+          await ctx.reply("🎵 Link audio:\n" + audio.url);
+        }
+      }
+    }
+
     if (!sent && platform === "threads") {
       await ctx.reply("⚠️ Media Threads terdeteksi, tapi Telegram gagal mengambil file dari CDN.");
     }
   } catch (err) {
     console.error((err.response && err.response.data) || err.message);
-    ctx.reply("❌ *Gagal memproses link.*\n\nCoba cek lagi link-nya, atau API sedang sibuk.", { parse_mode: "Markdown" });
+    ctx.reply("❌ *Gagal memproses link.*\n\nCoba cek lagi link-nya, atau API sedang sibuk.", {
+      parse_mode: "Markdown",
+    });
   } finally {
     try {
       await ctx.telegram.deleteMessage(ctx.chat.id, loading.message_id);
@@ -211,6 +279,7 @@ function adminOnly(ctx) {
 }
 
 bot.start(sendWelcome);
+
 bot.help((ctx) => ctx.reply(helpText(), { parse_mode: "Markdown", ...menuKeyboard() }));
 
 bot.action("help_download", (ctx) => {
@@ -305,7 +374,11 @@ bot.command("broadcast", (ctx) => {
 
     for (const user of rows) {
       try {
-        await ctx.telegram.sendMessage(user.id, "📢 *Broadcast MediaMuncher*\n\n" + msg, { parse_mode: "Markdown" });
+        await ctx.telegram.sendMessage(
+          user.id,
+          "📢 *Broadcast MediaMuncher*\n\n" + msg,
+          { parse_mode: "Markdown" }
+        );
         success++;
         await sleep(100);
       } catch (e) {
