@@ -15,7 +15,8 @@ function saveDB(db) {
 
 function addUser(user) {
   const db = loadDB();
-  if (!db.users[user.id]) {
+  const isNew = !db.users[user.id];
+  if (isNew) {
     db.users[user.id] = {
       id: user.id,
       username: user.username || "",
@@ -23,8 +24,12 @@ function addUser(user) {
       downloads: 0,
       created_at: new Date().toISOString()
     };
+    saveDB(db);
   }
-  saveDB(db);
+  return {
+    isNew,
+    userNumber: Object.keys(db.users).length
+  };
 }
 
 function addDownload(userId, platform) {
