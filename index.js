@@ -9,6 +9,9 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const API_BASE = process.env.API_BASE || "https://dramafeed.vercel.app/api/downloader";
 const ADMIN_ID = Number(process.env.ADMIN_ID || 8126241407);
 const WELCOME_IMAGE = "./welcome.png";
+const BOT_VERSION = "1.1.0";
+const BOT_USERNAME = process.env.BOT_USERNAME || "MediaMuncherBot"; // isi di .env tanpa @
+const START_TIME = Date.now();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -95,9 +98,10 @@ function getAudio(data) {
       duration: data.audio.duration || 0,
     };
   }
-
   return null;
 }
+
+// ─── Keyboards ────────────────────────────────────────────────────────────────
 
 function menuKeyboard() {
   return Markup.inlineKeyboard([
@@ -105,12 +109,30 @@ function menuKeyboard() {
       Markup.button.callback("📥 Download", "help_download"),
       Markup.button.callback("📌 Command", "help_command"),
     ],
-    [Markup.button.url("👨‍💻 Owner", "https://t.me/einsteinsocrates46")],
+    [Markup.button.url("👨‍💻 Owner", "https://t.me/t.me/penywiseeeee")],
   ]);
 }
 
-function welcomeText() {
+// Tombol share yang muncul setelah download selesai
+function shareKeyboard() {
+  const shareText = encodeURIComponent(
+    "🤖 Aku pakai MediaMuncher buat download video TikTok, IG, FB, X & Threads tanpa watermark! Coba juga yuk 👇"
+  );
+  const shareUrl = encodeURIComponent(`https://t.me/${BOT_USERNAME}`);
+  return Markup.inlineKeyboard([
+    [Markup.button.url("🔗 Bagikan Bot ini ke Teman", `https://t.me/share/url?url=${shareUrl}&text=${shareText}`)],
+  ]);
+}
+
+// ─── Teks ─────────────────────────────────────────────────────────────────────
+
+function welcomeText(firstName, userNumber, isNew) {
+  const greeting = isNew
+    ? `👋 Halo *${firstName}*! Kamu user ke-*${userNumber}* di MediaMuncher 🎉\n\n`
+    : `👋 Halo lagi *${firstName}*! Senang kamu balik 😄\n\n`;
+
   return (
+    greeting +
     "🤖 *Welcome to MediaMuncher!*\n\n" +
     "Downloader social media cepat, simpel, dan rapi.\n\n" +
     "✅ TikTok Video + Audio\n" +
@@ -141,17 +163,31 @@ function helpText() {
   );
 }
 
+function getUptime() {
+  const ms = Date.now() - START_TIME;
+  const hours = Math.floor(ms / 3600000);
+  const minutes = Math.floor((ms % 3600000) / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  if (hours > 0) return `${hours}j ${minutes}m ${seconds}d`;
+  if (minutes > 0) return `${minutes}m ${seconds}d`;
+  return `${seconds}d`;
+}
+
+// ─── Handlers ─────────────────────────────────────────────────────────────────
+
 async function sendWelcome(ctx) {
-  db.addUser(ctx.from);
+  const result = db.addUser(ctx.from);
+  const firstName = ctx.from.first_name || "Bro";
+  const text = welcomeText(firstName, result.userNumber, result.isNew);
 
   if (fs.existsSync(WELCOME_IMAGE)) {
     return ctx.replyWithPhoto(
       { source: WELCOME_IMAGE },
-      { caption: welcomeText(), parse_mode: "Markdown", ...menuKeyboard() }
+      { caption: text, parse_mode: "Markdown", ...menuKeyboard() }
     );
   }
 
-  return ctx.reply(welcomeText(), { parse_mode: "Markdown", ...menuKeyboard() });
+  return ctx.reply(text, { parse_mode: "Markdown", ...menuKeyboard() });
 }
 
 async function loadingMessage(ctx) {
@@ -206,6 +242,7 @@ async function processLink(ctx, url, forcedPlatform = null) {
     db.addDownload(ctx.from.id, platform);
 
     let sent = 0;
+    let lastSentMsgId = null;
 
     for (const media of medias.slice(0, 10)) {
       const caption =
@@ -215,12 +252,14 @@ async function processLink(ctx, url, forcedPlatform = null) {
         "⚡ Status: *Success*";
 
       try {
+        let sentMsg;
         if (media.type === "photo") {
-          await ctx.replyWithPhoto({ url: media.url }, { caption, parse_mode: "Markdown" });
+          sentMsg = await ctx.replyWithPhoto({ url: media.url }, { caption, parse_mode: "Markdown" });
         } else {
-          await ctx.replyWithVideo({ url: media.url }, { caption, parse_mode: "Markdown" });
+          sentMsg = await ctx.replyWithVideo({ url: media.url }, { caption, parse_mode: "Markdown" });
         }
         sent++;
+        lastSentMsgId = sentMsg?.message_id;
       } catch (e) {
         console.error("Gagal kirim media:", e.message);
         if (platform !== "threads") await ctx.reply("✅ Link media:\n" + media.url);
@@ -258,6 +297,15 @@ async function processLink(ctx, url, forcedPlatform = null) {
     if (!sent && platform === "threads") {
       await ctx.reply("⚠️ Media Threads terdeteksi, tapi Telegram gagal mengambil file dari CDN.");
     }
+
+    // Kirim tombol share setelah semua media terkirim
+    if (sent > 0) {
+      await ctx.reply(
+        "📤 *Suka bot ini? Bagikan ke teman kamu!*",
+        { parse_mode: "Markdown", ...shareKeyboard() }
+      );
+    }
+
   } catch (err) {
     console.error((err.response && err.response.data) || err.message);
     ctx.reply("❌ *Gagal memproses link.*\n\nCoba cek lagi link-nya, atau API sedang sibuk.", {
@@ -278,9 +326,43 @@ function adminOnly(ctx) {
   return ctx.from && ctx.from.id === ADMIN_ID;
 }
 
+// ─── Commands ─────────────────────────────────────────────────────────────────
+
 bot.start(sendWelcome);
 
 bot.help((ctx) => ctx.reply(helpText(), { parse_mode: "Markdown", ...menuKeyboard() }));
+
+bot.command("about", (ctx) => {
+  db.getStats((stats) => {
+    const text =
+      "ℹ️ *MediaMuncher — About*\n\n" +
+      "🤖 Bot downloader social media serba bisa.\n\n" +
+      "━━━━━━━━━━━━━━━━\n" +
+      "📦 *Versi:* `" + BOT_VERSION + "`\n" +
+      "⏱️ *Uptime:* `" + getUptime() + "`\n" +
+      "━━━━━━━━━━━━━━━━\n" +
+      "👥 *Total Users:* `" + stats.totalUsers + "`\n" +
+      "📥 *Total Downloads:* `" + stats.totalDownloads + "`\n" +
+      "━━━━━━━━━━━━━━━━\n" +
+      "🌐 *Platform Support:*\n" +
+      "  • TikTok (Video + Audio)\n" +
+      "  • Instagram Reels\n" +
+      "  • Facebook Reels\n" +
+      "  • X / Twitter\n" +
+      "  • Threads\n" +
+      "━━━━━━━━━━━━━━━━\n" +
+      "👨‍💻 *Developer:* @@penywiseeeee\n" +
+      "💬 *Support:* t.me/penywiseeeee";
+
+    ctx.reply(text, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.url("👨‍💻 Hubungi Developer", "https://t.me/penywiseeeee")],
+        [Markup.button.url("🔗 Bagikan Bot", `https://t.me/share/url?url=${encodeURIComponent("https://t.me/" + BOT_USERNAME)}&text=${encodeURIComponent("🤖 Coba MediaMuncher, bot downloader TikTok/IG/FB/X/Threads gratis!")}`)],
+      ]),
+    });
+  });
+});
 
 bot.action("help_download", (ctx) => {
   ctx.answerCbQuery();
