@@ -1,35 +1,75 @@
 require("dotenv").config();
+
 const { Telegraf } = require("telegraf");
 const axios = require("axios");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const API_BASE = process.env.API_BASE;
+const API_BASE = process.env.API_BASE || "https://dramafeed.vercel.app/api/downloader";
 
 function detectPlatform(url) {
-  url = url.toLowerCase();
+  const u = url.toLowerCase();
 
-  if (url.includes("tiktok.com")) return "tiktok";
-  if (url.includes("instagram.com")) return "instagram";
-  if (url.includes("facebook.com") || url.includes("fb.watch")) return "facebook";
-  if (url.includes("twitter.com") || url.includes("x.com")) return "twitter";
-  if (url.includes("threads.com") || url.includes("threads.net")) return "threads";
+  if (u.includes("tiktok.com")) return "tiktok";
+  if (u.includes("instagram.com")) return "instagram";
+  if (u.includes("facebook.com") || u.includes("fb.watch")) return "facebook";
+  if (u.includes("twitter.com") || u.includes("x.com")) return "twitter";
+  if (u.includes("threads.com") || u.includes("threads.net")) return "threads";
 
   return null;
 }
 
-function findMediaUrl(obj) {
-  const text = JSON.stringify(obj);
-  const match = text.match(/https?:\/\/[^"'\\]+?\.(mp4|mov|m4v|webm)(\?[^"'\\]*)?/i);
-  return match ? match[0] : null;
+function findMediaUrls(data) {
+  const urls = [];
+
+  if (data.video) {
+    if (data.video.hdplay) urls.push(data.video.hdplay);
+    if (data.video.play) urls.push(data.video.play);
+    if (data.video.wmplay) urls.push(data.video.wmplay);
+  }
+
+  function scan(obj) {
+    if (!obj) return;
+
+    if (typeof obj === "string" && obj.startsWith("http")) {
+      const s = obj.toLowerCase();
+
+      if (
+        s.includes("mime_type=video_mp4") ||
+        s.includes(".mp4") ||
+        s.includes("video") ||
+        s.includes("tiktokcdn") ||
+        s.includes("cdninstagram") ||
+        s.includes("fbcdn") ||
+        s.includes("twimg") ||
+        s.includes("threads")
+      ) {
+        urls.push(obj.replace(/\\u0026/g, "&"));
+      }
+      return;
+    }
+
+    if (Array.isArray(obj)) {
+      obj.forEach(scan);
+      return;
+    }
+
+    if (typeof obj === "object") {
+      Object.values(obj).forEach(scan);
+    }
+  }
+
+  scan(data);
+
+  return [...new Set(urls)];
 }
 
 bot.start((ctx) => {
   ctx.reply(
 `👋 Halo mas!
 
-Kirim link video dari:
+Kirim link video:
 ✅ TikTok
-✅ Instagram Reels
+✅ Instagram
 ✅ Facebook
 ✅ X/Twitter
 ✅ Threads
@@ -40,49 +80,56 @@ https://vt.tiktok.com/xxxx`
 });
 
 bot.on("text", async (ctx) => {
-  const url = ctx.message.text.trim();
+  const text = ctx.message.text.trim();
 
-  if (!url.startsWith("http")) {
+  if (!text.startsWith("http")) {
     return ctx.reply("Kirim link video nya mas.");
   }
 
-  const platform = detectPlatform(url);
+  const platform = detectPlatform(text);
 
   if (!platform) {
     return ctx.reply("Platform belum support mas.");
   }
 
-  const loading = await ctx.reply("⏳ Sedang download mas...");
+  const loading = await ctx.reply("⏳ Sedang proses mas...");
 
   try {
-    const apiUrl = `${API_BASE}?platform=${platform}&url=${encodeURIComponent(url)}`;
-    const res = await axios.get(apiUrl, { timeout: 60000 });
+    const apiUrl = `${API_BASE}?platform=${platform}&url=${encodeURIComponent(text)}`;
+    const res = await axios.get(apiUrl, {
+      timeout: 60000,
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
 
-    const data = res.data;
-    const mediaUrl = findMediaUrl(data);
+    const mediaUrls = findMediaUrls(res.data);
 
-    if (!mediaUrl) {
-      console.log(JSON.stringify(data, null, 2));
-      return ctx.reply("❌ Gagal ambil video mas. Respon API tidak nemu link mp4.");
+    if (!mediaUrls.length) {
+      console.log(JSON.stringify(res.data, null, 2));
+      return ctx.reply("❌ Gagal ambil media mas.");
     }
 
-    await ctx.replyWithVideo(
-      { url: mediaUrl },
-      {
-        caption: `✅ Berhasil download dari ${platform.toUpperCase()}`
+    for (const mediaUrl of mediaUrls.slice(0, 5)) {
+      try {
+        await ctx.replyWithVideo(
+          { url: mediaUrl },
+          { caption: `✅ ${platform.toUpperCase()} Downloader` }
+        );
+      } catch (e) {
+        await ctx.reply(`✅ Link media:\n${mediaUrl}`);
       }
-    );
+    }
 
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error((err.response && err.response.data) || err.message);
     ctx.reply("❌ Error mas, API gagal merespon atau link tidak valid.");
   } finally {
     try {
       await ctx.telegram.deleteMessage(ctx.chat.id, loading.message_id);
-    } catch {}
+    } catch (e) {}
   }
 });
 
 bot.launch();
-
 console.log("Bot downloader aktif...");
