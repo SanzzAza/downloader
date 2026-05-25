@@ -190,19 +190,45 @@ async function sendWelcome(ctx) {
   return ctx.reply(text, { parse_mode: "Markdown", ...menuKeyboard() });
 }
 
+function progressDots(percent) {
+  const total = 10;
+  const filled = Math.round((percent / 100) * total);
+  const empty = total - filled;
+  return "●".repeat(filled) + "○".repeat(empty);
+}
+
+function progressText(percent, status) {
+  return (
+    "╭──────────────╮\n" +
+    "│ Downloading  │\n" +
+    "│ " + progressDots(percent) + " " + percent + "% │\n" +
+    "│ " + status.padEnd(12, " ").slice(0, 12) + " │\n" +
+    "╰──────────────╯"
+  );
+}
+
 async function loadingMessage(ctx) {
-  const msg = await ctx.reply("⏳ Menghubungi server...");
+  const msg = await ctx.reply(progressText(0, "Starting..."));
+
   const steps = [
-    "🔎 Mendeteksi platform...",
-    "📡 Mengambil data media...",
-    "🧩 Menyiapkan file...",
-    "🚀 Mengirim ke Telegram...",
+    { percent: 10, status: "Checking..." },
+    { percent: 25, status: "Detecting..." },
+    { percent: 40, status: "Fetching..." },
+    { percent: 55, status: "Preparing..." },
+    { percent: 70, status: "Processing.." },
+    { percent: 85, status: "Uploading..." },
+    { percent: 95, status: "Finishing..." },
   ];
 
   for (const step of steps) {
-    await sleep(500);
+    await sleep(450);
     try {
-      await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, step);
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        msg.message_id,
+        null,
+        progressText(step.percent, step.status)
+      );
     } catch (e) {}
   }
 
