@@ -4,8 +4,7 @@ const { Telegraf } = require("telegraf");
 const axios = require("axios");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const API_BASE =
-  process.env.API_BASE || "https://dramafeed.vercel.app/api/downloader";
+const API_BASE = process.env.API_BASE || "https://dramafeed.vercel.app/api/downloader";
 
 function detectPlatform(url) {
   const u = url.toLowerCase();
@@ -19,26 +18,43 @@ function detectPlatform(url) {
   return null;
 }
 
+function isPhotoUrl(url) {
+  return /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
+}
+
 function getMedia(data) {
   const medias = [];
 
-  // TikTok format
+  // TikTok
   if (data.video) {
-    const videoUrl = data.video.hdplay || data.video.play || data.video.wmplay;
-    if (videoUrl) medias.push({ type: "video", url: videoUrl });
+    const url = data.video.hdplay || data.video.play || data.video.wmplay;
+    if (url) medias.push({ type: "video", url });
   }
 
-  // Common array format
+  // Facebook format: data.data.hd / data.data.sd
+  if (data.data && (data.data.hd || data.data.sd)) {
+    medias.push({
+      type: "video",
+      url: data.data.hd || data.data.sd,
+    });
+  }
+
+  // Twitter/X kadang array
+  if (data.data && Array.isArray(data.data)) {
+    for (const item of data.data) {
+      const url = item.url || item.video || item.link;
+      if (url) medias.push({ type: isPhotoUrl(url) ? "photo" : "video", url });
+    }
+  }
+
+  // Instagram / Threads / umum
   const candidates =
     data.medias ||
     data.media ||
     (data.data && data.data.medias) ||
     (data.data && data.data.media) ||
     (data.result && data.result.medias) ||
-    (data.result && data.result.media) ||
-    data.download ||
-    (data.data && data.data.download) ||
-    (data.result && data.result.download);
+    (data.result && data.result.media);
 
   if (Array.isArray(candidates)) {
     for (const item of candidates) {
@@ -47,25 +63,19 @@ function getMedia(data) {
         item.link ||
         item.download_url ||
         item.video ||
-        item.image ||
-        item.thumbnail;
-
-      const typeRaw = String(item.type || item.ext || item.mime || "").toLowerCase();
+        item.image;
 
       if (!url) continue;
 
-      if (
-        typeRaw.includes("image") ||
-        /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url)
-      ) {
-        medias.push({ type: "photo", url });
-      } else {
-        medias.push({ type: "video", url });
-      }
+      const typeRaw = String(item.type || item.ext || item.mime || "").toLowerCase();
+      const type =
+        typeRaw.includes("image") || isPhotoUrl(url) ? "photo" : "video";
+
+      medias.push({ type, url });
     }
   }
 
-  // Common direct object format
+  // Direct fallback
   const direct =
     data.url ||
     data.download_url ||
@@ -81,8 +91,10 @@ function getMedia(data) {
     (data.result && data.result.image_url);
 
   if (!medias.length && direct) {
-    const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(direct);
-    medias.push({ type: isImage ? "photo" : "video", url: direct });
+    medias.push({
+      type: isPhotoUrl(direct) ? "photo" : "video",
+      url: direct,
+    });
   }
 
   return medias.filter(
@@ -131,7 +143,12 @@ async function processLink(ctx, url) {
           );
         }
       } catch (e) {
-        await ctx.reply("✅ Link media:\n" + media.url);
+        console.error("Gagal kirim media:", e.message);
+
+        // Threads sering gagal fetch image dari Telegram, jangan spam link
+        if (platform !== "threads") {
+          await ctx.reply("✅ Link media:\n" + media.url);
+        }
       }
     }
   } catch (err) {
